@@ -1,0 +1,132 @@
+heat_template_version: 2016-04-08
+
+description: >
+  Ceph stuff
+
+parameters:
+
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instances.
+    default: "eugene2"
+
+  instance_type:
+    type: string
+    description: Instance type for Ceph cluster.
+    default: m1.small
+
+  image_id:
+    type: string
+    description: >
+      The name or the ID of the image to use to host the base OS for the
+      Ceph cluster deployment.
+    default: CentOS-7-x86_64
+
+resources:
+
+# Networking
+
+  net_ceph_internal:
+    type: OS::Neutron::Net
+    properties:
+      name: "net_ceph_internal"
+
+  sub_ceph_internal:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: net_ceph_internal }
+      cidr: "10.0.0.0/24"
+      gateway_ip: "10.0.0.1"
+      allocation_pools:
+        - start: "10.0.0.100"
+          end: "10.0.0.200"
+
+  net_ceph_external:
+    type: OS::Neutron::Net
+    properties:
+      name: "net_ceph_external"
+
+  sub_ceph_external:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: net_ceph_external }
+      cidr: "192.168.0.0/24"
+      gateway_ip: "192.168.0.1"
+      allocation_pools:
+        - start: "192.168.0.100"
+          end: "192.168.0.200"
+
+  ceph_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: "public1"
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: ceph_router }
+      subnet_id: { get_resource: sub_ceph_external }
+
+
+# Ceph OSD
+
+  ceph_master_mon:
+    type: OS::Heat::ResourceGroup
+    properties:
+      resource_def:
+        type: ceph_mons.yaml
+        properties:
+          name: ceph-mon-master
+          image_name: { get_param: image_id }
+          flavor_name: m1.small
+          key_name: { get_param: key_name }
+          net_ceph_external_id: { get_resource: net_ceph_external }
+          sub_ceph_external_id: { get_resource: sub_ceph_external }
+          net_ceph_internal_id: { get_resource: net_ceph_internal }
+          sub_ceph_internal_id: { get_resource: sub_ceph_internal }
+
+  ceph_mons:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 2
+      resource_def:
+        type: ceph_mons.yaml
+        properties:
+          name: ceph-mon%index%
+          image_name: { get_param: image_id }
+          flavor_name: m1.small
+          key_name: { get_param: key_name }
+          net_ceph_external_id: { get_resource: net_ceph_external }
+          sub_ceph_external_id: { get_resource: sub_ceph_external }
+          net_ceph_internal_id: { get_resource: net_ceph_internal }
+          sub_ceph_internal_id: { get_resource: sub_ceph_internal }
+
+  ceph_osds:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 3
+      resource_def:
+        type: ceph_osds.yaml
+        properties:
+          name: ceph-osd%index%
+          image_name: { get_param: image_id }
+          flavor_name: m1.small
+          key_name: { get_param: key_name }
+          net_ceph_external_id: { get_resource: net_ceph_external }
+          sub_ceph_external_id: { get_resource: sub_ceph_external }
+          net_ceph_internal_id: { get_resource: net_ceph_internal }
+          sub_ceph_internal_id: { get_resource: sub_ceph_internal }
+          
+  ceph_mon_fip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: "public1"
+      port_id:
+        list_join:
+        - ""
+        - {get_attr: [ceph_master_mon, instance_networks]}
+
+outputs:
+  child_1_ip_address:
+    value: { get_resource: ceph_mon_fip }
